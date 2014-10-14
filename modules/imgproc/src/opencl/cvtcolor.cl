@@ -312,58 +312,104 @@ __kernel void YUV2RGB_NVx(__global const uchar* srcptr, int src_step, int src_of
     int x = get_global_id(0);
     int y = get_global_id(1) * PIX_PER_WI_Y;
 
-    if (x < cols / 2)
+    if (x < cols / 4)
     {
         #pragma unroll
         for (int cy = 0; cy < PIX_PER_WI_Y; ++cy)
         {
             if (y < rows / 2 )
             {
-                __global const uchar* ysrc = srcptr + mad24(y << 1, src_step, (x << 1) + src_offset);
-                __global const uchar* usrc = srcptr + mad24(rows + y, src_step, (x << 1) + src_offset);
-                __global uchar*       dst1 = dstptr + mad24(y << 1, dst_step, mad24(x, dcn<<1, dt_offset));
+                __global const uchar* ysrc = srcptr + mad24(y << 1, src_step, (x << 2) + src_offset);
+                __global const uchar* usrc = srcptr + mad24(rows + y, src_step, (x << 2) + src_offset);
+                __global uchar*       dst1 = dstptr + mad24(y << 1, dst_step, mad24(x << 2, dcn, dt_offset));
                 __global uchar*       dst2 = dst1 + dst_step;
 
-                int Y1 = ysrc[0];
-                int Y2 = ysrc[1];
-                int Y3 = ysrc[src_step];
-                int Y4 = ysrc[src_step + 1];
+                float4 Y1 = convert_float4(vload4(0, ysrc));
+                float4 Y2 = convert_float4(vload4(0, ysrc + src_step));
 
-                int U  = ((int)usrc[uidx]) - HALF_MAX;
-                int V  = ((int)usrc[1-uidx]) - HALF_MAX;
+                float4 UV = convert_float4(vload4(0, usrc));
 
-                int ruv = mad24(ITUR_BT_601_CVR, V, (1 << (ITUR_BT_601_SHIFT - 1)));
-                int guv = mad24(ITUR_BT_601_CVG, V, mad24(ITUR_BT_601_CUG, U, (1 << (ITUR_BT_601_SHIFT - 1))));
-                int buv = mad24(ITUR_BT_601_CUB, U, (1 << (ITUR_BT_601_SHIFT - 1)));
+                UV -= HALF_MAX;
+                Y1 = max(0.f, Y1 - 16.f) * 1220542.f;
+                Y2 = max(0.f, Y2 - 16.f) * 1220542.f;
+#if uidx == 0
+                float U = UV.s0;
+                float V = UV.s1;
+#else
+                float U = UV.s1;
+                float V = UV.s0;
+#endif
+                float ruv = mad(1673527.f, V, 524288.f);
+                float guv = mad(-852492.f, V, mad(-409993.f, U, 524288.f));
+                float buv = mad(2116026.f, U, 524288.f);
 
-                Y1 = mul24(max(0, Y1 - 16), ITUR_BT_601_CY);
-                dst1[2 - bidx] = convert_uchar_sat((Y1 + ruv) >> ITUR_BT_601_SHIFT);
-                dst1[1]        = convert_uchar_sat((Y1 + guv) >> ITUR_BT_601_SHIFT);
-                dst1[bidx]     = convert_uchar_sat((Y1 + buv) >> ITUR_BT_601_SHIFT);
+                dst1[2 - bidx] = convert_uchar_sat((Y1.s0 + ruv) / 1048576.f);
+                dst1[1]        = convert_uchar_sat((Y1.s0 + guv) / 1048576.f);
+                dst1[bidx]     = convert_uchar_sat((Y1.s0 + buv) / 1048576.f);
 #if dcn == 4
                 dst1[3]        = 255;
 #endif
 
-                Y2 = mul24(max(0, Y2 - 16), ITUR_BT_601_CY);
-                dst1[dcn + 2 - bidx] = convert_uchar_sat((Y2 + ruv) >> ITUR_BT_601_SHIFT);
-                dst1[dcn + 1]        = convert_uchar_sat((Y2 + guv) >> ITUR_BT_601_SHIFT);
-                dst1[dcn + bidx]     = convert_uchar_sat((Y2 + buv) >> ITUR_BT_601_SHIFT);
+                dst1[dcn + 2 - bidx] = convert_uchar_sat((Y1.s1 + ruv) / 1048576.f);
+                dst1[dcn + 1]        = convert_uchar_sat((Y1.s1 + guv) / 1048576.f);
+                dst1[dcn + bidx]     = convert_uchar_sat((Y1.s1 + buv) / 1048576.f);
 #if dcn == 4
                 dst1[7]        = 255;
 #endif
 
-                Y3 = mul24(max(0, Y3 - 16), ITUR_BT_601_CY);
-                dst2[2 - bidx] = convert_uchar_sat((Y3 + ruv) >> ITUR_BT_601_SHIFT);
-                dst2[1]        = convert_uchar_sat((Y3 + guv) >> ITUR_BT_601_SHIFT);
-                dst2[bidx]     = convert_uchar_sat((Y3 + buv) >> ITUR_BT_601_SHIFT);
+                dst2[2 - bidx] = convert_uchar_sat((Y2.s0 + ruv) / 1048576.f);
+                dst2[1]        = convert_uchar_sat((Y2.s0 + guv) / 1048576.f);
+                dst2[bidx]     = convert_uchar_sat((Y2.s0 + buv) / 1048576.f);
 #if dcn == 4
                 dst2[3]        = 255;
 #endif
 
-                Y4 = mul24(max(0, Y4 - 16), ITUR_BT_601_CY);
-                dst2[dcn + 2 - bidx] = convert_uchar_sat((Y4 + ruv) >> ITUR_BT_601_SHIFT);
-                dst2[dcn + 1]        = convert_uchar_sat((Y4 + guv) >> ITUR_BT_601_SHIFT);
-                dst2[dcn + bidx]     = convert_uchar_sat((Y4 + buv) >> ITUR_BT_601_SHIFT);
+                dst2[dcn + 2 - bidx] = convert_uchar_sat((Y2.s1 + ruv) / 1048576.f);
+                dst2[dcn + 1]        = convert_uchar_sat((Y2.s1 + guv) / 1048576.f);
+                dst2[dcn + bidx]     = convert_uchar_sat((Y2.s1 + buv) / 1048576.f);
+#if dcn == 4
+                dst2[7]        = 255;
+#endif
+
+
+#if uidx == 0
+                U = UV.s2;
+                V = UV.s3;
+#else
+                U = UV.s3;
+                V = UV.s2;
+#endif
+                ruv = mad(1673527.f, V, 524288.f);
+                guv = mad(-852492.f, V, mad(-409993.f, U, 524288.f));
+                buv = mad(2116026.f, U, 524288.f);
+
+
+                dst1 += 2*dcn;
+                dst1[2 - bidx] = convert_uchar_sat((Y1.s2 + ruv) / 1048576.f);
+                dst1[1]        = convert_uchar_sat((Y1.s2 + guv) / 1048576.f);
+                dst1[bidx]     = convert_uchar_sat((Y1.s2 + buv) / 1048576.f);
+#if dcn == 4
+                dst1[3]        = 255;
+#endif
+
+                dst1[dcn + 2 - bidx] = convert_uchar_sat((Y1.s3 + ruv) / 1048576.f);
+                dst1[dcn + 1]        = convert_uchar_sat((Y1.s3 + guv) / 1048576.f);
+                dst1[dcn + bidx]     = convert_uchar_sat((Y1.s3 + buv) / 1048576.f);
+#if dcn == 4
+                dst1[7]        = 255;
+#endif
+
+                dst2+= 2*dcn;
+                dst2[2 - bidx] = convert_uchar_sat((Y2.s2 + ruv) / 1048576.f);
+                dst2[1]        = convert_uchar_sat((Y2.s2 + guv) / 1048576.f);
+                dst2[bidx]     = convert_uchar_sat((Y2.s2 + buv) / 1048576.f);
+#if dcn == 4
+                dst2[3]        = 255;
+#endif
+
+                dst2[dcn + 2 - bidx] = convert_uchar_sat((Y2.s3 + ruv) / 1048576.f);
+                dst2[dcn + 1]        = convert_uchar_sat((Y2.s3 + guv) / 1048576.f);
+                dst2[dcn + bidx]     = convert_uchar_sat((Y2.s3 + buv) / 1048576.f);
 #if dcn == 4
                 dst2[7]        = 255;
 #endif

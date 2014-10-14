@@ -98,6 +98,9 @@ PARAM_TEST_CASE(CvtColor, MatDepth, bool)
             OCL_OFF(cv::cvtColor(src_roi, dst_roi, code, channelsOut));
             OCL_ON(cv::cvtColor(usrc_roi, udst_roi, code, channelsOut));
 
+            //std::cout << dst_roi << std::endl;
+            //std::cout << udst_roi.getMat(ACCESS_READ) << std::endl;
+
             Near(threshold);
         }
     }
@@ -331,7 +334,7 @@ struct CvtColor_YUV2RGB_420 :
         const int dstType = CV_MAKE_TYPE(depth, channelsOut);
 
         Size roiSize = randomSize(1, MAX_VALUE);
-        roiSize.width *= 2;
+        roiSize.width *= 4;
         roiSize.height *= 3;
         Border srcBorder = randomBorder(0, use_roi ? MAX_VALUE : 0);
         randomSubMat(src, src_roi, roiSize, srcBorder, srcType, 2, 100);
