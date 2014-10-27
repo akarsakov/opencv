@@ -4974,9 +4974,13 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
                code == COLOR_YUV2BGRA_NV21 || code == COLOR_YUV2BGR_NV21 ? 1 : 0;
 
         dstSz = Size(sz.width, sz.height * 2 / 3);
-        globalsize[0] = dstSz.width / 2; globalsize[1] = (dstSz.height/2 + pxPerWIy - 1) / pxPerWIy;
+        if (dev.isIntel() && src.cols % 4 == 0 && src.offset % 4 == 0 && src.step % 4 == 0)
+        {
+            pxPerWIx = 2;
+        }
+        globalsize[0] = dstSz.width / (2 * pxPerWIx); globalsize[1] = (dstSz.height/2 + pxPerWIy - 1) / pxPerWIy;
         k.create("YUV2RGB_NVx", ocl::imgproc::cvtcolor_oclsrc,
-                 opts + format("-D dcn=%d -D bidx=%d -D uidx=%d", dcn, bidx, uidx));
+            opts + format("-D dcn=%d -D bidx=%d -D uidx=%d -D PIX_PER_WI_X=%d", dcn, bidx, uidx, pxPerWIx));
         break;
     }
     case COLOR_YUV2BGR_YV12: case COLOR_YUV2RGB_YV12: case COLOR_YUV2BGRA_YV12: case COLOR_YUV2RGBA_YV12:
@@ -5060,7 +5064,8 @@ static bool ocl_cvtColor( InputArray _src, OutputArray _dst, int code, int dcn )
         CV_Assert( scn == 2 && depth == CV_8U );
 
         k.create("YUV2RGB_422", ocl::imgproc::cvtcolor_oclsrc,
-                 opts + format("-D dcn=%d -D bidx=%d -D uidx=%d -D yidx=%d", dcn, bidx, uidx, yidx));
+                 opts + format("-D dcn=%d -D bidx=%d -D uidx=%d -D yidx=%d%s", dcn, bidx, uidx, yidx,
+                                src.offset % 4 == 0 && src.step % 4 == 0 ? " -D USE_OPTIMIZED_LOAD" : ""));
         break;
     }
     case COLOR_BGR2YCrCb:

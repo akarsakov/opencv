@@ -301,6 +301,31 @@ __kernel void YUV2RGB(__global const uchar* srcptr, int src_step, int src_offset
         }
     }
 }
+
+#if dcn == 4
+#define STORE_YUV420_RGB(dst, Y1, Y2)                  \
+    Y1 = max(0.f, (Y1) - 16.f) * coeffs[0];              \
+    dst[2 - bidx] = convert_uchar_sat(Y1 + ruv);       \
+    dst[1]        = convert_uchar_sat(Y1 + guv);       \
+    dst[bidx]     = convert_uchar_sat(Y1 + buv);       \
+    dst[3]        = 255;                               \
+    Y2 = max(0.f, Y2 - 16.f) * coeffs[0];              \
+    dst[dcn + 2 - bidx] = convert_uchar_sat((Y2) + ruv); \
+    dst[dcn + 1]        = convert_uchar_sat((Y2) + guv); \
+    dst[dcn + bidx]     = convert_uchar_sat((Y2) + buv); \
+    dst[7]        = 255;
+#else
+#define STORE_YUV420_RGB(dst, Y1, Y2)                  \
+    Y1 = max(0.f, Y1 - 16.f) * coeffs[0];              \
+    dst[2 - bidx] = convert_uchar_sat(Y1 + ruv);       \
+    dst[1]        = convert_uchar_sat(Y1 + guv);       \
+    dst[bidx]     = convert_uchar_sat(Y1 + buv);       \
+    Y2 = max(0.f, Y2 - 16.f) * coeffs[0];              \
+    dst[dcn + 2 - bidx] = convert_uchar_sat(Y2 + ruv); \
+    dst[dcn + 1]        = convert_uchar_sat(Y2 + guv); \
+    dst[dcn + bidx]     = convert_uchar_sat(Y2 + buv);
+#endif
+
 __constant float c_YUV2RGBCoeffs_420[5] = { 1.163999557f, 2.017999649f, -0.390999794f,
                                             -0.812999725f, 1.5959997177f };
 
@@ -308,7 +333,7 @@ __kernel void YUV2RGB_NVx(__global const uchar* srcptr, int src_step, int src_of
                             __global uchar* dstptr, int dst_step, int dt_offset,
                             int rows, int cols)
 {
-    int x = get_global_id(0);
+    int x = get_global_id(0) * PIX_PER_WI_X;
     int y = get_global_id(1) * PIX_PER_WI_Y;
 
     if (x < cols / 2)
@@ -322,7 +347,39 @@ __kernel void YUV2RGB_NVx(__global const uchar* srcptr, int src_step, int src_of
                 __global const uchar* usrc = srcptr + mad24(rows + y, src_step, (x << 1) + src_offset);
                 __global uchar*       dst1 = dstptr + mad24(y << 1, dst_step, mad24(x, dcn<<1, dt_offset));
                 __global uchar*       dst2 = dst1 + dst_step;
+                __constant float* coeffs = c_YUV2RGBCoeffs_420;
 
+#if PIX_PER_WI_X == 2
+                int row1 = *((__global const int*) ysrc);
+                int row2 = *((__global const int*) (ysrc + src_step));
+                int uv_row = *((__global const int*) usrc);
+
+                float uv_vec[4];
+                *((float4*) uv_vec) = convert_float4(as_uchar4(uv_row));
+                float U = uv_vec[uidx] - HALF_MAX, V = uv_vec[1 - uidx] - HALF_MAX;
+                float Y1 = row1 & 0xff, Y2 = (row1 >> 8) & 0xff;
+                float Y3 = row2 & 0xff, Y4 = (row2 >> 8) & 0xff;
+
+                float ruv = fma(coeffs[4], V, 0.5f);
+                float guv = fma(coeffs[3], V, fma(coeffs[2], U, 0.5f));
+                float buv = fma(coeffs[1], U, 0.5f);
+
+                STORE_YUV420_RGB(dst1, Y1, Y2);
+                STORE_YUV420_RGB(dst2, Y3, Y4);
+
+                U = uv_vec[2 + uidx] - HALF_MAX, V = uv_vec[3 - uidx] - HALF_MAX;
+                Y1 = (row1 >> 16) & 0xff, Y2 = (row1 >> 24) & 0xff;
+                Y3 = (row2 >> 16) & 0xff, Y4 = (row2 >> 24) & 0xff;
+
+                ruv = fma(coeffs[4], V, 0.5f);
+                guv = fma(coeffs[3], V, fma(coeffs[2], U, 0.5f));
+                buv = fma(coeffs[1], U, 0.5f);
+
+                dst1 += 2*dcn;
+                dst2 += 2*dcn;
+                STORE_YUV420_RGB(dst1, Y1, Y2);
+                STORE_YUV420_RGB(dst2, Y3, Y4);
+#else
                 float Y1 = ysrc[0];
                 float Y2 = ysrc[1];
                 float Y3 = ysrc[src_step];
@@ -331,41 +388,12 @@ __kernel void YUV2RGB_NVx(__global const uchar* srcptr, int src_step, int src_of
                 float U  = ((float)usrc[uidx]) - HALF_MAX;
                 float V  = ((float)usrc[1-uidx]) - HALF_MAX;
 
-                __constant float* coeffs = c_YUV2RGBCoeffs_420;
                 float ruv = fma(coeffs[4], V, 0.5f);
                 float guv = fma(coeffs[3], V, fma(coeffs[2], U, 0.5f));
                 float buv = fma(coeffs[1], U, 0.5f);
 
-                Y1 = max(0.f, Y1 - 16.f) * coeffs[0];
-                dst1[2 - bidx] = convert_uchar_sat(Y1 + ruv);
-                dst1[1]        = convert_uchar_sat(Y1 + guv);
-                dst1[bidx]     = convert_uchar_sat(Y1 + buv);
-#if dcn == 4
-                dst1[3]        = 255;
-#endif
-
-                Y2 = max(0.f, Y2 - 16.f) * coeffs[0];
-                dst1[dcn + 2 - bidx] = convert_uchar_sat(Y2 + ruv);
-                dst1[dcn + 1]        = convert_uchar_sat(Y2 + guv);
-                dst1[dcn + bidx]     = convert_uchar_sat(Y2 + buv);
-#if dcn == 4
-                dst1[7]        = 255;
-#endif
-
-                Y3 = max(0.f, Y3 - 16.f) * coeffs[0];
-                dst2[2 - bidx] = convert_uchar_sat(Y3 + ruv);
-                dst2[1]        = convert_uchar_sat(Y3 + guv);
-                dst2[bidx]     = convert_uchar_sat(Y3 + buv);
-#if dcn == 4
-                dst2[3]        = 255;
-#endif
-
-                Y4 = max(0.f, Y4 - 16.f) * coeffs[0];
-                dst2[dcn + 2 - bidx] = convert_uchar_sat(Y4 + ruv);
-                dst2[dcn + 1]        = convert_uchar_sat(Y4 + guv);
-                dst2[dcn + bidx]     = convert_uchar_sat(Y4 + buv);
-#if dcn == 4
-                dst2[7]        = 255;
+                STORE_YUV420_RGB(dst1, Y1, Y2);
+                STORE_YUV420_RGB(dst2, Y3, Y4);
 #endif
             }
             ++y;
@@ -573,22 +601,34 @@ __kernel void YUV2RGB_422(__global const uchar* srcptr, int src_step, int src_of
         {
             if (y < rows )
             {
+                __constant float* coeffs = c_YUV2RGBCoeffs_420;
+
+#ifndef USE_OPTIMIZED_LOAD
                 float U = ((float) src[uidx]) - HALF_MAX;
                 float V = ((float) src[(2 + uidx) % 4]) - HALF_MAX;
+                float y00 = max(0.f, ((float) src[yidx]) - 16.f) * coeffs[0];
+                float y01 = max(0.f, ((float) src[yidx + 2]) - 16.f) * coeffs[0];
+#else
+                int load_src = *((int*) src);
+                float vec_src[4] = { load_src & 0xff, (load_src >> 8) & 0xff, (load_src >> 16) & 0xff, (load_src >> 24) & 0xff};
+                float U = vec_src[uidx] - HALF_MAX;
+                float V = vec_src[(2 + uidx) % 4] - HALF_MAX;
+                float y00 = max(0.f, vec_src[yidx] - 16.f) * coeffs[0];
+                float y01 = max(0.f, vec_src[yidx + 2] - 16.f) * coeffs[0];
+#endif
 
-                __constant float* coeffs = c_YUV2RGBCoeffs_420;
                 float ruv = fma(coeffs[4], V, 0.5f);
                 float guv = fma(coeffs[3], V, fma(coeffs[2], U, 0.5f));
                 float buv = fma(coeffs[1], U, 0.5f);
 
-                float y00 = max(0.f, ((float) src[yidx]) - 16.f) * coeffs[0];
+
                 dst[2 - bidx] = convert_uchar_sat(y00 + ruv);
                 dst[1]        = convert_uchar_sat(y00 + guv);
                 dst[bidx]     = convert_uchar_sat(y00 + buv);
 #if dcn == 4
                 dst[3]        = 255;
 #endif
-                float y01 = max(0.f, ((float) src[yidx + 2]) - 16.f) * coeffs[0];
+
                 dst[dcn + 2 - bidx] = convert_uchar_sat(y01 + ruv);
                 dst[dcn + 1]        = convert_uchar_sat(y01 + guv);
                 dst[dcn + bidx]     = convert_uchar_sat(y01 + buv);
